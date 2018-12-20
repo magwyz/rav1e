@@ -195,10 +195,24 @@ pub fn motion_estimation(
         steps.push(1);
       }
 
+
+      let diamond_pattern = [[0usize, 1], [1, 0], [2, 1], [1, 2]];
+      let full_search_pattern = {
+        let mut ret = [[0usize; 2]; 9];
+        for i in 1..9 {
+            ret[i][0] = i % 3;
+            ret[i][1] = i / 3
+          }
+        ret
+      };
+
+      let pattern = &diamond_pattern;
+
       for step in steps {
         let center_mv_h = best_mv;
-        for i in 0..3 {
-          for j in 0..3 {
+        for p in pattern.iter() {
+            let i = p[0];
+            let j = p[1];
             // Skip the center point that was already tested
             if i == 1 && j == 1 {
               continue;
@@ -248,7 +262,6 @@ pub fn motion_estimation(
               best_mv = cand_mv;
             }
           }
-        }
       }
 
       best_mv
