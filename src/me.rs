@@ -191,6 +191,16 @@ fn diamond_me_search(fi: &FrameInvariants, fs: &FrameState,
     pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
     blk_w, blk_h, center_mv, &mut tmp_plane);
 
+  if center_cost == std::u32::MAX {
+    /* cmv is not a valid motion vector for the current block.
+       We fallback to the (0, 0) center motion vector. */
+    center_mv = MotionVector{row: 0, col: 0};
+    center_cost = get_mv_cost(
+      fi, fs, po, ref_frame, bit_depth,
+      pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
+      blk_w, blk_h, center_mv, &mut tmp_plane);
+  }
+
   loop {
 
     let mut best_diamond_cost = std::u32::MAX;
