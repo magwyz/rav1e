@@ -562,6 +562,7 @@ pub struct FrameInvariants {
     pub ref_frames: [u8; INTER_REFS_PER_FRAME],
     pub ref_frame_sign_bias: [bool; INTER_REFS_PER_FRAME],
     pub rec_buffer: ReferenceFramesSet,
+    pub prev_frame_mvs: Vec<MotionVector>,
     pub base_q_idx: u8,
     pub dc_delta_q: [i8; 3],
     pub ac_delta_q: [i8; 3],
@@ -588,6 +589,9 @@ impl FrameInvariants {
         let use_reduced_tx_set = config.speed_settings.reduced_tx_set;
         let use_tx_domain_distortion = config.tune == Tune::Psnr && config.speed_settings.tx_domain_distortion;
 
+        let w_in_b = 2 * width.align_power_of_two_and_shift(3); // MiCols, ((width+7)/8)<<3 >> MI_SIZE_LOG2
+        let h_in_b = 2 * height.align_power_of_two_and_shift(3); // MiRows, ((height+7)/8)<<3 >> MI_SIZE_LOG2
+
         FrameInvariants {
             sequence,
             width,
@@ -596,8 +600,8 @@ impl FrameInvariants {
             padded_h: height.align_power_of_two(3),
             sb_width: width.align_power_of_two_and_shift(6),
             sb_height: height.align_power_of_two_and_shift(6),
-            w_in_b: 2 * width.align_power_of_two_and_shift(3), // MiCols, ((width+7)/8)<<3 >> MI_SIZE_LOG2
-            h_in_b: 2 * height.align_power_of_two_and_shift(3), // MiRows, ((height+7)/8)<<3 >> MI_SIZE_LOG2
+            w_in_b: w_in_b,
+            h_in_b: h_in_b,
             number: 0,
             order_hint: 0,
             show_frame: true,
@@ -635,6 +639,7 @@ impl FrameInvariants {
             ref_frames: [0; INTER_REFS_PER_FRAME],
             ref_frame_sign_bias: [false; INTER_REFS_PER_FRAME],
             rec_buffer: ReferenceFramesSet::new(),
+            prev_frame_mvs: vec![MotionVector{row: 0, col: 0}; w_in_b * h_in_b],
             base_q_idx: config.quantizer as u8,
             dc_delta_q: [0; 3],
             ac_delta_q: [0; 3],
@@ -2293,6 +2298,7 @@ fn encode_partition_bottomup(
   fi: &FrameInvariants, fs: &mut FrameState, cw: &mut ContextWriter,
   w_pre_cdef: &mut dyn Writer, w_post_cdef: &mut dyn Writer, bsize: BlockSize,
   bo: &BlockOffset, pmvs: &[[Option<MotionVector>; REF_FRAMES]; 5],
+  frame_mvs: &mut Vec<Vec<MotionVector>>,
   ref_rd_cost: f64
 ) -> (f64, Option<RDOPartitionOutput>) {
     let mut rd_cost = std::f64::MAX;
@@ -2353,7 +2359,9 @@ fn encode_partition_bottomup(
         };
         let spmvs = &pmvs[pmv_idx];
 
-        let mode_decision = rdo_mode_decision(fi, fs, cw, bsize, bo, spmvs, false).part_modes[0].clone();
+        let mode_decision = rdo_mode_decision(
+            fi, fs, cw, bsize, bo, spmvs, false,
+            frame_mvs).part_modes[0].clone();
 
         rd_cost = mode_decision.rd_cost + cost;
 
@@ -2423,6 +2431,7 @@ fn encode_partition_bottomup(
                     subsize,
                     offset,
                     pmvs,//&best_decision.mvs[0]
+                    frame_mvs,
                     best_rd
                 ) {
                     rd_cost += cost;
@@ -2473,10 +2482,11 @@ fn encode_partition_bottomup(
     (best_rd, Some(best_decision))
 }
 
-fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
+fn encode_partition_topdown(fi: &mut FrameInvariants, fs: &mut FrameState,
             cw: &mut ContextWriter, w_pre_cdef: &mut dyn Writer, w_post_cdef: &mut dyn Writer,
             bsize: BlockSize, bo: &BlockOffset, block_output: &Option<RDOOutput>,
-            pmvs: &[[Option<MotionVector>; REF_FRAMES]; 5]
+            pmvs: &[[Option<MotionVector>; REF_FRAMES]; 5],
+            frame_mvs: &mut Vec<Vec<MotionVector>>
 ) {
 
     if bo.x >= cw.bc.cols || bo.y >= cw.bc.rows {
@@ -2523,8 +2533,10 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
             partition_types.push(PartitionType::PARTITION_NONE);
             partition_types.push(PartitionType::PARTITION_SPLIT);
         }
-        rdo_output = rdo_partition_decision(fi, fs, cw,
-            w_pre_cdef, w_post_cdef, bsize, bo, &rdo_output, pmvs, &partition_types);
+        rdo_output = rdo_partition_decision(
+            fi, fs, cw,
+            w_pre_cdef, w_post_cdef, bsize, bo, &rdo_output, pmvs, &partition_types,
+            frame_mvs);
         partition = rdo_output.part_type;
     } else {
         // Blocks of sizes below the supported range are encoded directly
@@ -2555,7 +2567,9 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
                     let spmvs = &pmvs[pmv_idx];
 
                     // Make a prediction mode decision for blocks encoded with no rdo_partition_decision call (e.g. edges)
-                    rdo_mode_decision(fi, fs, cw, bsize, bo, spmvs, false).part_modes[0].clone()
+                    rdo_mode_decision(
+                        fi, fs, cw, bsize, bo, spmvs, false,
+                        frame_mvs).part_modes[0].clone()
                 };
 
             let mut mode_luma = part_decision.pred_mode_luma;
@@ -2622,6 +2636,12 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
             encode_block_b(fi, fs, cw, if cdef_coded  {w_post_cdef} else {w_pre_cdef},
                           mode_luma, mode_chroma, ref_frames, mvs, bsize, bo, skip, cfl,
                           tx_size, tx_type, mode_context, &mv_stack, false);
+
+            for mi_y in (bo.y)..(bo.y + bsize.height_mi()) {
+                for mi_x in (bo.x)..(bo.x + bsize.width_mi()) {
+                  fi.prev_frame_mvs[mi_y * fi.w_in_b + mi_x] = part_decision.mvs[0].clone();
+                }
+            }
         },
         PARTITION_SPLIT |
         PARTITION_HORZ |
@@ -2641,7 +2661,7 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
                         &Some(RDOOutput {
                             rd_cost: mode.rd_cost,
                             part_type: PartitionType::PARTITION_NONE,
-                            part_modes: vec![mode] }), pmvs);
+                            part_modes: vec![mode] }), pmvs, frame_mvs);
                 }
             }
             else {
@@ -2665,7 +2685,8 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
                             subsize,
                             offset,
                             &None,
-                            pmvs
+                            pmvs,
+                            frame_mvs
                         );
                     });
             }
@@ -2679,7 +2700,7 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
     }
 }
 
-fn encode_tile(fi: &FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
+fn encode_tile(fi: &mut FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
     let mut w = WriterEncoder::new();
 
     let fc = if fi.primary_ref_frame == PRIMARY_REF_NONE {
@@ -2697,6 +2718,8 @@ fn encode_tile(fi: &FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
 
     // initial coarse ME loop
     let mut frame_pmvs = Vec::new();
+
+    let mut frame_mvs = vec![vec![MotionVector{row: 0, col: 0}; fi.w_in_b * fi.h_in_b]; REF_FRAMES];
 
     for sby in 0..fi.sb_height {
         for sbx in 0..fi.sb_width {
@@ -2776,12 +2799,13 @@ fn encode_tile(fi: &FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
             if fi.config.speed_settings.encode_bottomup {
                 encode_partition_bottomup(fi, fs, &mut cw,
                                           &mut w_pre_cdef, &mut w_post_cdef,
-                                          BlockSize::BLOCK_64X64, &bo, &pmvs, std::f64::MAX);
+                                          BlockSize::BLOCK_64X64, &bo, &pmvs, &mut frame_mvs, std::f64::MAX);
             }
             else {
                 encode_partition_topdown(fi, fs, &mut cw,
                                          &mut w_pre_cdef, &mut w_post_cdef,
-                                         BlockSize::BLOCK_64X64, &bo, &None, &pmvs);
+                                         BlockSize::BLOCK_64X64, &bo, &None, &pmvs,
+                                         &mut frame_mvs);
             }
 
             // CDEF has to be decisded before loop restoration, but coded after
