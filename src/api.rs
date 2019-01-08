@@ -122,6 +122,7 @@ pub struct SpeedSettings {
   pub prediction_modes: PredictionModesSetting,
   pub include_near_mvs: bool,
   pub no_scene_detection: bool,
+  pub diamond_me: bool
 }
 
 impl Default for SpeedSettings {
@@ -137,6 +138,7 @@ impl Default for SpeedSettings {
       prediction_modes: PredictionModesSetting::Simple,
       include_near_mvs: false,
       no_scene_detection: false,
+      diamond_me: false,
     }
   }
 }
@@ -154,6 +156,7 @@ impl SpeedSettings {
       prediction_modes: Self::prediction_modes_preset(speed),
       include_near_mvs: Self::include_near_mvs_preset(speed),
       no_scene_detection: Self::no_scene_detection_preset(speed),
+      diamond_me: Self::diamond_me_preset(speed),
     }
   }
 
@@ -211,6 +214,10 @@ impl SpeedSettings {
 
   fn no_scene_detection_preset(speed: usize) -> bool {
     speed == 10
+  }
+
+  fn diamond_me_preset(speed: usize) -> bool {
+    speed >= 3
   }
 }
 
