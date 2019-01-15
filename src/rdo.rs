@@ -360,7 +360,8 @@ impl Default for EncodingSettings {
 // RDO-based mode decision
 pub fn rdo_mode_decision(fi: &FrameInvariants, fs: &mut FrameState,
   cw: &mut ContextWriter, bsize: BlockSize, bo: &BlockOffset,
-  pmvs: &[Option<MotionVector>], needs_rec: bool
+  pmvs: &[Option<MotionVector>], needs_rec: bool,
+  frame_comp_mvs: &mut Vec<Vec<MotionVector>>
 ) -> RDOOutput {
   let mut best = EncodingSettings::default();
 
@@ -411,8 +412,20 @@ pub fn rdo_mode_decision(fi: &FrameInvariants, fs: &mut FrameState,
       if mv_stack.len() > 0 { pmv[0] = mv_stack[0].this_mv; }
       if mv_stack.len() > 1 { pmv[1] = mv_stack[1].this_mv; }
       let cmv = pmvs[ref_slot_set[i] as usize].unwrap();
+      let mut frame_mvs = &mut frame_comp_mvs[ref_slot_set[i] as usize];
+
+      let b_me = motion_estimation(fi, fs, bsize, bo, ref_frames[0], cmv, &pmv,
+        &frame_mvs);
+
+      // Fill the saved motion structure.
+      for mi_y in (bo.y)..(bo.y + bsize.height_mi()) {
+        for mi_x in (bo.x)..(bo.x + bsize.width_mi()) {
+          frame_mvs[mi_y * fi.w_in_b + mi_x] = b_me;
+        }
+      }
+
       mvs_from_me.push([
-        motion_estimation(fi, fs, bsize, bo, ref_frames[0], cmv, &pmv),
+        b_me,
         MotionVector { row: 0, col: 0 }
       ]);
 
@@ -912,6 +925,7 @@ pub fn rdo_partition_decision(
   bsize: BlockSize, bo: &BlockOffset,
   cached_block: &RDOOutput, pmvs: &[[Option<MotionVector>; REF_FRAMES]; 5],
   partition_types: &Vec<PartitionType>,
+  frame_comp_mvs: &mut Vec<Vec<MotionVector>>
 ) -> RDOOutput {
   let mut best_partition = cached_block.part_type;
   let mut best_rd = cached_block.rd_cost;
@@ -940,7 +954,7 @@ pub fn rdo_partition_decision(
 
         let spmvs = &pmvs[pmv_idx];
 
-        let mode_decision = rdo_mode_decision(fi, fs, cw, bsize, bo, spmvs, false).part_modes[0].clone();
+        let mode_decision = rdo_mode_decision(fi, fs, cw, bsize, bo, spmvs, false, frame_comp_mvs).part_modes[0].clone();
         child_modes.push(mode_decision);
       }
       PARTITION_SPLIT |
@@ -991,7 +1005,7 @@ pub fn rdo_partition_decision(
             .map(|(&offset, pmv_idx)| {
               let mode_decision =
               rdo_mode_decision(fi, fs, cw, subsize, &offset,
-                &pmvs[pmv_idx], true)
+                &pmvs[pmv_idx], true, frame_comp_mvs)
                 .part_modes[0]
                 .clone();
 

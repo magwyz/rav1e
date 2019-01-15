@@ -145,10 +145,48 @@ fn get_mv_range(fi: &FrameInvariants, bo: &BlockOffset, blk_w: usize, blk_h: usi
 
 pub fn motion_estimation(
   fi: &FrameInvariants, fs: &FrameState, bsize: BlockSize, bo: &BlockOffset,
-  ref_frame: usize, cmv: MotionVector, pmv: &[MotionVector; 2]
+  ref_frame: usize, cmv: MotionVector, pmv: &[MotionVector; 2], frame_comp_mvs: &Vec<MotionVector>
 ) -> MotionVector {
   match fi.rec_buffer.frames[fi.ref_frames[ref_frame - LAST_FRAME] as usize] {
-    Some(ref _rec) => {
+    Some(ref rec) => {
+      let mut init_mvs = Vec::new();
+
+      if bo.x > 0 {
+        let left = frame_comp_mvs[bo.y * fi.w_in_b + bo.x - 1];
+        init_mvs.push(left);
+      }
+      if bo.y > 0 {
+        let top = frame_comp_mvs[(bo.y - 1) * fi.w_in_b + bo.x];
+        init_mvs.push(top);
+
+        if bo.x < fi.w_in_b - 1 {
+          let top_right = frame_comp_mvs[(bo.y - 1) * fi.w_in_b + bo.x + 1];
+          init_mvs.push(top_right);
+        }
+      }
+
+      if init_mvs.len() > 0 {
+        let mut median_mv = MotionVector{row: 0, col: 0};
+        for mv in init_mvs.iter() {
+          median_mv = median_mv + *mv;
+        }
+        median_mv = median_mv / (init_mvs.len() as i16);
+
+        if !fi.allow_high_precision_mv {
+          if median_mv.row % 2 != 0 {
+            median_mv.row = median_mv.row - 1;
+          }
+          if median_mv.col % 2 != 0 {
+            median_mv.col = median_mv.col - 1;
+          }
+        }
+
+        init_mvs.push(median_mv);
+      }
+      init_mvs.push(MotionVector{row: 0, col: 0});
+      init_mvs.push(cmv);
+      init_mvs.push(fi.prev_frame_mvs[bo.y * fi.w_in_b + bo.x]);
+
       let po = PlaneOffset {
         x: (bo.x as isize) << BLOCK_TO_PLANE_SHIFT,
         y: (bo.y as isize) << BLOCK_TO_PLANE_SHIFT
@@ -157,16 +195,52 @@ pub fn motion_estimation(
       let blk_h = bsize.height();
       let (mut mvx_min, mut mvx_max, mut mvy_min, mut mvy_max) = get_mv_range(fi, bo, blk_w, blk_h);
 
+      let mut range = 32;
+      let x_lo = po.x + ((-range + (cmv.col / 8) as isize).max(mvx_min / 8).min(mvx_max / 8));
+      let x_hi = po.x + ((range + (cmv.col / 8) as isize).max(mvx_min / 8).min(mvx_max / 8));
+      let y_lo = po.y + ((-range + (cmv.row / 8) as isize).max(mvy_min / 8).min(mvy_max / 8));
+      let y_hi = po.y + ((range + (cmv.row / 8) as isize).max(mvy_min / 8).min(mvy_max / 8));
+
+      let mut lowest_cost = std::u32::MAX;
+      let mut full_search_mv = MotionVector { row: 0, col: 0 };
+ 
+       // 0.5 is a fudge factor
+       let lambda = (get_lambda_sqrt(fi) * 256.0 * 0.5) as u32;
+ 
+      full_search(
+        x_lo,
+        x_hi,
+        y_lo,
+        y_hi,
+        blk_h,
+        blk_w,
+        &fs.input.planes[0],
+        &rec.frame.planes[0],
+        &mut full_search_mv,
+        &mut lowest_cost,
+        &po,
+        2,
+        fi.sequence.bit_depth,
+        lambda,
+        pmv,
+        fi.allow_high_precision_mv
+      );
+
+      init_mvs.push(full_search_mv);
+
+
       // 0.5 is a fudge factor
       let lambda = (get_lambda_sqrt(fi) * 256.0 * 0.5) as u32;
 
       let best_mv = diamond_me_search(
         fi, fs,
-        &po, ref_frame, cmv, fi.sequence.bit_depth,
+        &po, ref_frame, &init_mvs, fi.sequence.bit_depth,
         pmv, lambda,
         mvx_min, mvx_max, mvy_min, mvy_max,
         blk_w, blk_h);
 
+      assert!(!fi.allow_high_precision_mv && best_mv.row % 2 == 0 && best_mv.col % 2 == 0
+        || fi.allow_high_precision_mv);
       best_mv
     }
 
@@ -175,30 +249,35 @@ pub fn motion_estimation(
 }
 
 fn diamond_me_search(fi: &FrameInvariants, fs: &FrameState,
-                     po: &PlaneOffset, ref_frame: usize, cmv: MotionVector,
+                     po: &PlaneOffset, ref_frame: usize, init_mvs: &[MotionVector],
                      bit_depth: usize, pmv: &[MotionVector; 2], lambda: u32,
                      mvx_min: isize, mvx_max: isize, mvy_min: isize, mvy_max: isize,
                      blk_w: usize, blk_h: usize) -> MotionVector
 {
   let diamond_pattern = [(1i16, 0i16), (0, 1), (-1, 0), (0, -1)];
-  let mut diamond_radius: i16 = 16;
+  let mut diamond_radius: i16 = 8*2;
 
   let mut tmp_plane = Plane::new(blk_w, blk_h, 0, 0, 0, 0);
 
-  let mut center_mv = cmv;
-  let mut center_cost = get_mv_cost(
-    fi, fs, po, ref_frame, bit_depth,
-    pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
-    blk_w, blk_h, center_mv, &mut tmp_plane);
+  let mut center_mv = MotionVector{row: 0, col: 0};
+  let mut center_mv_cost = std::u32::MAX;
 
-  if center_cost == std::u32::MAX {
-    /* cmv is not a valid motion vector for the current block.
-       We fallback to the (0, 0) center motion vector. */
-    center_mv = MotionVector{row: 0, col: 0};
-    center_cost = get_mv_cost(
+  let radius_stop = {if fi.allow_high_precision_mv {1} else {2}};
+  
+  for init_mv in init_mvs.iter() {
+    let cost = get_mv_cost(
       fi, fs, po, ref_frame, bit_depth,
       pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
-      blk_w, blk_h, center_mv, &mut tmp_plane);
+      blk_w, blk_h, *init_mv, &mut tmp_plane);
+
+    if cost < center_mv_cost {
+      center_mv = *init_mv;
+      center_mv_cost = cost;
+    }
+  }
+
+  if center_mv_cost / ((blk_w * blk_h) as u32) < 256 {
+    diamond_radius = 2;
   }
 
   loop {
@@ -224,8 +303,8 @@ fn diamond_me_search(fi: &FrameInvariants, fs: &FrameState,
         }
     }
 
-    if center_cost <= best_diamond_cost {
-      if diamond_radius == 1 {
+    if center_mv_cost <= best_diamond_cost {
+      if diamond_radius == radius_stop {
         break;
       } else {
         diamond_radius /= 2;
@@ -233,11 +312,11 @@ fn diamond_me_search(fi: &FrameInvariants, fs: &FrameState,
     }
     else {
       center_mv = best_diamond_mv;
-      center_cost = best_diamond_cost;
+      center_mv_cost = best_diamond_cost;
     }
   }
 
-  assert!(center_cost < std::u32::MAX);
+  assert!(center_mv_cost < std::u32::MAX);
 
   return center_mv;
 }

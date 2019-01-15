@@ -10,6 +10,7 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
+use std::ops;
 use self::BlockSize::*;
 use self::TxSize::*;
 use context::*;
@@ -728,11 +729,28 @@ pub enum FilterIntraMode {
   FILTER_INTRA_MODES
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Debug, Clone)]
 pub struct MotionVector {
   pub row: i16,
   pub col: i16
 }
+
+impl ops::Add<MotionVector> for MotionVector {
+    type Output = MotionVector;
+
+    fn add(self, _rhs: MotionVector) -> MotionVector {
+        MotionVector{row: self.row + _rhs.row, col: self.col + _rhs.col}
+    }
+}
+
+impl ops::Div<i16> for MotionVector {
+    type Output = MotionVector;
+
+    fn div(self, _rhs: i16) -> MotionVector {
+        MotionVector{row: self.row  / _rhs, col: self.col / _rhs}
+    }
+}
+
 
 pub const NEWMV_MODE_CONTEXTS: usize = 7;
 pub const GLOBALMV_MODE_CONTEXTS: usize = 2;
