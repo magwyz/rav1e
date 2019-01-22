@@ -316,14 +316,14 @@ fn get_best_predictor(fi: &FrameInvariants,
   let mut center_mv = MotionVector{row: 0, col: 0};
   let mut center_mv_cost = std::u32::MAX;
 
-  for init_mv in predictors.iter() {
+  for &init_mv in predictors.iter() {
     let cost = get_mv_rd_cost(
       fi, po, p_org, p_ref, bit_depth,
       pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
-      blk_w, blk_h, *init_mv);
+      blk_w, blk_h, init_mv);
 
     if cost < center_mv_cost {
-      center_mv = *init_mv;
+      center_mv = init_mv;
       center_mv_cost = cost;
     }
   }
