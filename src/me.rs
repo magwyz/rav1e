@@ -148,57 +148,60 @@ fn get_mv_range(
 pub fn get_subset_predictors(
   fi: &FrameInvariants, bo: &BlockOffset, cmv: MotionVector,
   frame_mvs: &Vec<MotionVector>,
-  predictors: &mut [Vec<MotionVector>; 3]) {
+  predictors: &mut Vec<MotionVector>) {
 
   // EPZS subset A and B predictors.
 
   if bo.x > 0 {
     let left = frame_mvs[bo.y * fi.w_in_b + bo.x - 1];
-    predictors[1].push(left);
+    predictors.push(left);
   }
   if bo.y > 0 {
     let top = frame_mvs[(bo.y - 1) * fi.w_in_b + bo.x];
-    predictors[1].push(top);
+    predictors.push(top);
 
     if bo.x < fi.w_in_b - 1 {
       let top_right = frame_mvs[(bo.y - 1) * fi.w_in_b + bo.x + 1];
-      predictors[1].push(top_right);
+      predictors.push(top_right);
     }
   }
 
-  if predictors[1].len() > 0 {
+  if predictors.len() > 0 {
     let mut median_mv = MotionVector{row: 0, col: 0};
-    for mv in predictors[1].iter() {
+    for mv in predictors.iter() {
       median_mv = median_mv + *mv;
     }
-    median_mv = median_mv / (predictors[1].len() as i16);
+    median_mv = median_mv / (predictors.len() as i16);
 
-    predictors[0].push(median_mv.quantize_to_fullpel());
+    predictors.push(median_mv.quantize_to_fullpel());
   }
 
-  predictors[1].push(MotionVector{row: 0, col: 0});
-  predictors[0].push(cmv.quantize_to_fullpel());
+  predictors.push(MotionVector{row: 0, col: 0});
+
+  // Coarse motion estimation.
+
+  predictors.push(cmv.quantize_to_fullpel());
 
   // EPZS subset C predictors.
 
   if bo.x > 0 {
     let left = frame_mvs[bo.y * fi.w_in_b + bo.x - 1];
-    predictors[2].push(left);
+    predictors.push(left);
   }
   if bo.y > 0 {
     let top = frame_mvs[(bo.y - 1) * fi.w_in_b + bo.x];
-    predictors[2].push(top);
+    predictors.push(top);
   }
   if bo.x < fi.w_in_b - 1 {
     let right = frame_mvs[bo.y * fi.w_in_b + bo.x + 1];
-    predictors[2].push(right);
+    predictors.push(right);
   }
   if bo.y < fi.h_in_b - 1 {
     let bottom = frame_mvs[(bo.y + 1) * fi.w_in_b + bo.x];
-    predictors[2].push(bottom);
+    predictors.push(bottom);
   }
 
-  predictors[2].push(frame_mvs[bo.y * fi.w_in_b + bo.x]);
+  predictors.push(frame_mvs[bo.y * fi.w_in_b + bo.x]);
 }
 
 pub fn motion_estimation(
@@ -222,7 +225,7 @@ pub fn motion_estimation(
 
       // Full-pixel motion estimation
 
-      let mut predictors = [Vec::new(), Vec::new(), Vec::new()];
+      let mut predictors = Vec::new();
 
       get_subset_predictors(fi, bo, cmv,
         frame_mvs, &mut predictors);
@@ -334,7 +337,7 @@ fn get_best_predictor(fi: &FrameInvariants,
 fn diamond_me_search(
   fi: &FrameInvariants,
   po: &PlaneOffset, p_org: &Plane, p_ref: &Plane,
-  predictors: &[Vec<MotionVector>; 3],
+  predictors: &[MotionVector],
   bit_depth: usize, pmv: &[MotionVector; 2], lambda: u32,
   mvx_min: isize, mvx_max: isize, mvy_min: isize, mvy_max: isize,
   blk_w: usize, blk_h: usize) -> (MotionVector, u32)
@@ -343,37 +346,9 @@ fn diamond_me_search(
   let mut diamond_radius: i16 = 16;
 
   let (mut center_mv, mut center_mv_cost) = get_best_predictor(
-    fi, po, p_org, p_ref, &predictors[0],
+    fi, po, p_org, p_ref, &predictors,
     bit_depth, pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
     blk_w, blk_h);
-
-  if center_mv_cost / ((blk_w * blk_h) as u32) < 256 {
-    return (center_mv, center_mv_cost / ((blk_w * blk_h) as u32))
-  }
-
-  if predictors[1].len() > 0 {
-    let (test_center_mv, test_center_mv_cost) = get_best_predictor(
-      fi, po, p_org, p_ref, &predictors[1],
-      bit_depth, pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
-      blk_w, blk_h);
-
-    if test_center_mv_cost < center_mv_cost {
-      center_mv_cost = test_center_mv_cost;
-      center_mv = test_center_mv;
-    }
-  }
-
-  if predictors[2].len() > 0 {
-    let (test_center_mv, test_center_mv_cost) = get_best_predictor(
-      fi, po, p_org, p_ref, &predictors[2],
-      bit_depth, pmv, lambda, mvx_min, mvx_max, mvy_min, mvy_max,
-      blk_w, blk_h);
-
-    if test_center_mv_cost < center_mv_cost {
-      center_mv_cost = test_center_mv_cost;
-      center_mv = test_center_mv;
-    }
-  }
 
   loop {
     let mut best_diamond_rd_cost = std::u32::MAX;
@@ -488,10 +463,7 @@ pub fn estimate_motion_ss4(
     // Divide by 16 to account for subsampling, 0.125 is a fudge factor
     let lambda = (get_lambda_sqrt(fi) * 256.0 / 16.0 * 0.125) as u32;
 
-    let mut predictors = [
-      vec!(MotionVector{row: 0, col: 0}),
-      Vec::new(),
-      Vec::new()];
+    let mut predictors = vec!(MotionVector{row: 0, col: 0});
 
     let (mut best_mv, mut _lowest_cost) = diamond_me_search(
       fi, &po,
@@ -532,10 +504,7 @@ pub fn estimate_motion_ss2(
 
     for omv in pmvs.iter() {
       if let Some(pmv) = omv {
-        let mut predictors = [
-          vec!(pmv.clone()),
-          Vec::new(),
-          Vec::new()];
+        let mut predictors = vec!(pmv.clone());
 
         let ret = diamond_me_search(
           fi, &po,
