@@ -342,8 +342,9 @@ fn diamond_me_search(
   mvx_min: isize, mvx_max: isize, mvy_min: isize, mvy_max: isize,
   blk_w: usize, blk_h: usize) -> (MotionVector, u32)
 {
-  let diamond_pattern = [(1i16, 0i16), (0, 1), (-1, 0), (0, -1)];
-  let mut diamond_radius: i16 = 16;
+  let hex_pattern = vec![(-2i16, 0i16), (-1, 2), (1, 2), (2, 0), (1, -2), (-1, -2)];
+  let diamond_pattern = vec![(1i16, 0i16), (0, 1), (-1, 0), (0, -1)];
+  let mut hexagon = true;
 
   let (mut center_mv, mut center_mv_cost) = get_best_predictor(
     fi, po, p_org, p_ref, &predictors,
@@ -354,11 +355,13 @@ fn diamond_me_search(
     let mut best_diamond_rd_cost = std::u32::MAX;
     let mut best_diamond_mv = MotionVector { row: 0, col: 0 };
 
-    for p in diamond_pattern.iter() {
+    let pattern = {if hexagon {&hex_pattern} else {&diamond_pattern}};
+
+    for p in pattern.iter() {
 
         let cand_mv = MotionVector {
-          row: center_mv.row + diamond_radius * p.0,
-          col: center_mv.col + diamond_radius * p.1
+          row: center_mv.row + 8 * p.0,
+          col: center_mv.col + 8 * p.1
         };
 
         let rd_cost = get_mv_rd_cost(
@@ -373,10 +376,10 @@ fn diamond_me_search(
     }
 
     if center_mv_cost <= best_diamond_rd_cost {
-      if diamond_radius == 8 {
+      if hexagon == false {
         break;
       } else {
-        diamond_radius /= 2;
+        hexagon = false;
       }
     }
     else {
