@@ -11,6 +11,7 @@ use bitstream_io::*;
 use encoder::*;
 use metrics::calculate_frame_psnr;
 use partition::*;
+use me::*;
 use scenechange::SceneChangeDetector;
 use self::EncoderStatus::*;
 
@@ -79,6 +80,7 @@ pub struct SpeedSettings {
   pub rdo_tx_decision: bool,
   pub prediction_modes: PredictionModesSetting,
   pub include_near_mvs: bool,
+  pub allowed_me_precision: MEPrecision,
 }
 
 impl SpeedSettings {
@@ -93,6 +95,7 @@ impl SpeedSettings {
       rdo_tx_decision: Self::rdo_tx_decision_preset(speed),
       prediction_modes: Self::prediction_modes_preset(speed),
       include_near_mvs: Self::include_near_mvs_preset(speed),
+      allowed_me_precision: Self::allowed_me_precision_preset(speed),
     }
   }
 
@@ -146,6 +149,14 @@ impl SpeedSettings {
 
   fn include_near_mvs_preset(speed: usize) -> bool {
     speed <= 2
+  }
+
+  fn allowed_me_precision_preset(speed: usize) -> MEPrecision {
+    if speed <= 9 {
+      MEPrecision::QuarterPixel
+    } else {
+      MEPrecision::HalfPixel
+    }
   }
 }
 
