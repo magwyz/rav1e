@@ -529,7 +529,7 @@ pub struct FrameInvariants {
     pub showable_frame: bool,
     pub error_resilient: bool,
     pub intra_only: bool,
-    pub allow_high_precision_mv: bool,
+    pub allowed_me_precision: MEPrecision,
     pub frame_type: FrameType,
     pub show_existing_frame: bool,
     pub frame_to_show_map_idx: u32,
@@ -604,7 +604,7 @@ impl FrameInvariants {
             showable_frame: true,
             error_resilient: false,
             intra_only: false,
-            allow_high_precision_mv: false,
+            allowed_me_precision: config.speed_settings.allowed_me_precision,
             frame_type: FrameType::KEY,
             show_existing_frame: false,
             frame_to_show_map_idx: 0,
@@ -1288,7 +1288,7 @@ impl<W: io::Write> UncompressedHeader for BitWriter<W, BigEndian> {
         }
         if fi.force_integer_mv != 0 {
         } else {
-          self.write_bit(fi.allow_high_precision_mv);
+          self.write_bit(fi.allowed_me_precision == MEPrecision::EighthPixel);
         }
         self.write_bit(fi.is_filter_switchable)?;
         self.write_bit(fi.is_motion_mode_switchable)?;
@@ -1399,8 +1399,8 @@ impl<W: io::Write> UncompressedHeader for BitWriter<W, BigEndian> {
             let mv_x_ref = 0;
             let mv_y = 0;
             let mv_y_ref = 0;
-            let bits = 12 - 6 + 3 - !fi.allow_high_precision_mv as u8;
-            let bits_diff = 12 - 3 + fi.allow_high_precision_mv as u8;
+            let bits = 12 - 6 + 3 - !(fi.allowed_me_precision == MEPrecision::EighthPixel) as u8;
+            let bits_diff = 12 - 3 + (fi.allowed_me_precision == MEPrecision::EighthPixel) as u8;
             BCodeWriter::write_s_refsubexpfin(
               self,
               (1 << bits) + 1,
@@ -1991,7 +1991,7 @@ pub fn encode_block_b(fi: &FrameInvariants, fs: &mut FrameState,
 
             let mv_precision = if fi.force_integer_mv != 0 {
               MvSubpelPrecision::MV_SUBPEL_NONE
-            } else if fi.allow_high_precision_mv {
+            } else if fi.allowed_me_precision == MEPrecision::EighthPixel {
               MvSubpelPrecision::MV_SUBPEL_HIGH_PRECISION
             } else {
               MvSubpelPrecision::MV_SUBPEL_LOW_PRECISION

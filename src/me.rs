@@ -132,6 +132,15 @@ mod native {
   }
 }
 
+// Motion estimation search precision
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+pub enum MEPrecision {
+    FullPixel,
+    HalfPixel,
+    QuarterPixel,
+    EighthPixel
+}
+
 fn get_mv_range(
   fi: &FrameInvariants, bo: &BlockOffset, blk_w: usize, blk_h: usize
 ) -> (isize, isize, isize, isize) {
@@ -186,16 +195,16 @@ pub fn motion_estimation(
         fi.sequence.bit_depth,
         lambda,
         pmv,
-        fi.allow_high_precision_mv
+        fi.allowed_me_precision
       );
 
       let mode = PredictionMode::NEWMV;
       let mut tmp_plane = Plane::new(blk_w, blk_h, 0, 0, 0, 0);
 
-      let mut steps = vec![8, 4, 2];
-      if fi.allow_high_precision_mv {
-        steps.push(1);
-      }
+      let mut steps = vec![8];
+      if fi.allowed_me_precision >= MEPrecision::HalfPixel {steps.push(4);}
+      if fi.allowed_me_precision >= MEPrecision::QuarterPixel {steps.push(2);}
+      if fi.allowed_me_precision >= MEPrecision::EighthPixel {steps.push(1);}
 
       for step in steps {
         let center_mv_h = best_mv;
@@ -239,8 +248,8 @@ pub fn motion_estimation(
 
             let sad = get_sad(&plane_org, &plane_ref, blk_h, blk_w, fi.sequence.bit_depth);
 
-            let rate1 = get_mv_rate(cand_mv, pmv[0], fi.allow_high_precision_mv);
-            let rate2 = get_mv_rate(cand_mv, pmv[1], fi.allow_high_precision_mv);
+            let rate1 = get_mv_rate(cand_mv, pmv[0], fi.allowed_me_precision);
+            let rate2 = get_mv_rate(cand_mv, pmv[1], fi.allowed_me_precision);
             let rate = rate1.min(rate2 + 1);
             let cost = 256 * sad + rate * lambda;
 
@@ -263,7 +272,7 @@ fn full_search(
   x_lo: isize, x_hi: isize, y_lo: isize, y_hi: isize, blk_h: usize,
   blk_w: usize, p_org: &Plane, p_ref: &Plane, best_mv: &mut MotionVector,
   lowest_cost: &mut u32, po: &PlaneOffset, step: usize, bit_depth: usize,
-  lambda: u32, pmv: &[MotionVector; 2], allow_high_precision_mv: bool
+  lambda: u32, pmv: &[MotionVector; 2], allowed_me_precision: MEPrecision
 ) {
   for y in (y_lo..=y_hi).step_by(step) {
     for x in (x_lo..=x_hi).step_by(step) {
@@ -277,8 +286,8 @@ fn full_search(
         col: 8 * (x as i16 - po.x as i16)
       };
 
-      let rate1 = get_mv_rate(mv, pmv[0], allow_high_precision_mv);
-      let rate2 = get_mv_rate(mv, pmv[1], allow_high_precision_mv);
+      let rate1 = get_mv_rate(mv, pmv[0], allowed_me_precision);
+      let rate2 = get_mv_rate(mv, pmv[1], allowed_me_precision);
       let rate = rate1.min(rate2 + 1);
       let cost = 256 * sad + rate * lambda;
 
@@ -298,9 +307,9 @@ fn adjust_bo(bo: &BlockOffset, fi: &FrameInvariants, blk_w: usize, blk_h: usize)
   }
 }
 
-fn get_mv_rate(a: MotionVector, b: MotionVector, allow_high_precision_mv: bool) -> u32 {
-  fn diff_to_rate(diff: i16, allow_high_precision_mv: bool) -> u32 {
-    let d = if allow_high_precision_mv { diff } else { diff >> 1 };
+fn get_mv_rate(a: MotionVector, b: MotionVector, allowed_me_precision: MEPrecision) -> u32 {
+  fn diff_to_rate(diff: i16, allowed_me_precision: MEPrecision) -> u32 {
+    let d = if allowed_me_precision == MEPrecision::EighthPixel { diff } else { diff >> 1 };
     if d == 0 {
       0
     } else {
@@ -308,7 +317,7 @@ fn get_mv_rate(a: MotionVector, b: MotionVector, allow_high_precision_mv: bool) 
     }
   }
 
-  diff_to_rate(a.row - b.row, allow_high_precision_mv) + diff_to_rate(a.col - b.col, allow_high_precision_mv)
+  diff_to_rate(a.row - b.row, allowed_me_precision) + diff_to_rate(a.col - b.col, allowed_me_precision)
 }
 
 pub fn estimate_motion_ss4(
@@ -353,7 +362,7 @@ pub fn estimate_motion_ss4(
       fi.sequence.bit_depth,
       lambda,
       &[MotionVector { row: 0, col: 0 }; 2],
-      fi.allow_high_precision_mv
+      fi.allowed_me_precision
     );
 
     Some(MotionVector { row: best_mv.row * 4, col: best_mv.col * 4 })
@@ -406,7 +415,7 @@ pub fn estimate_motion_ss2(
           fi.sequence.bit_depth,
           lambda,
           &[MotionVector { row: 0, col: 0 }; 2],
-          fi.allow_high_precision_mv
+          fi.allowed_me_precision
         );
       }
     }
