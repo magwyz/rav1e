@@ -590,7 +590,7 @@ impl<T: Pixel> FrameInvariants<T> {
       showable_frame: true,
       error_resilient: false,
       intra_only: false,
-      allow_high_precision_mv: false,
+      allow_high_precision_mv: true,
       frame_type: FrameType::KEY,
       show_existing_frame: false,
       frame_to_show_map_idx: 0,
