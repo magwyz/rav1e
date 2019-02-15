@@ -1869,7 +1869,7 @@ fn encode_partition_topdown(fi: &FrameInvariants, fs: &mut FrameState,
     }
 }
 
-fn encode_tile(fi: &FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
+fn encode_tile(fi: &mut FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
   let mut w = WriterEncoder::new();
 
   let fc = if fi.primary_ref_frame == PRIMARY_REF_NONE {
@@ -1917,6 +1917,36 @@ fn encode_tile(fi: &FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
       cw.bc.cdef_coded = false;
       cw.bc.code_deltas = fi.delta_q_present;
 
+
+      /*let c = 0u64
+      let s = x1
+      pour j de 2 à n
+        s = s+xj
+        c = c+(j*xj − s)2/(j(j+1))
+      let variance = c/n*/
+
+      let mut c = [0i64; 2];
+      let mut s = [0i64; 2];
+      let mut j = 0i64;
+
+      let variance_iter = |c: &mut i64, s: &mut i64, j: i64, val: i16| {
+        *s = *s + val as i64;
+        let tmp = j * (val as i64) - *s;
+        *c = if j > 0 {
+          *c + tmp * tmp / (j * (j + 1))
+        } else {
+          0
+        };
+      };
+
+      let block_variance_iter = |c: &mut [i64], s: &mut [i64], j: &mut i64, mv_opt: Option<MotionVector>| {
+        if let Some(ref mv) = mv_opt {
+          variance_iter(&mut c[0], &mut s[0], *j, mv.col);
+          variance_iter(&mut c[1], &mut s[1], *j, mv.row);
+          *j = *j + 1;
+        }
+      };
+
       // Do subsampled ME
       let mut pmvs: [[Option<MotionVector>; REF_FRAMES]; 5] = [[None; REF_FRAMES]; 5];
       for i in 0..INTER_REFS_PER_FRAME {
@@ -1958,7 +1988,22 @@ fn encode_tile(fi: &FrameInvariants, fs: &mut FrameState) -> Vec<u8> {
             pmvs[4][r] = estimate_motion_ss2(
               fi, fs, BlockSize::BLOCK_32X32, r, &sbo.block_offset(8, 8), &[Some(pmv), pmv_e, pmv_s]
             );
+
+            for k in 1..5 {
+              block_variance_iter(&mut c, &mut s, &mut j, pmvs[k][r]);
+            }
           }
+        }
+      }
+
+      if j > 0 {
+        let variance_row = c[0] / j;
+        let variance_col = c[1] / j;
+        let variance = ((variance_row * variance_row + variance_col * variance_col) as f64).sqrt();
+        println!("Variance: {}", variance);
+
+        if variance < 5000f64 {
+          fi.allow_high_precision_mv = true
         }
       }
 
