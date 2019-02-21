@@ -16,9 +16,6 @@ use crate::FrameInvariants;
 use crate::FrameState;
 use crate::partition::*;
 use crate::plane::*;
-use crate::encoder::ReferenceFrame;
-
-use std::sync::Arc;
 
 #[cfg(all(target_arch = "x86_64", not(windows), feature = "nasm"))]
 mod nasm {
@@ -149,8 +146,7 @@ fn get_mv_range(
 
 pub fn get_subset_predictors(
   fi: &FrameInvariants, bo: &BlockOffset, cmv: MotionVector,
-  frame_mvs: &Vec<MotionVector>, frame_ref_opt: &Option<Arc<ReferenceFrame>>,
-  ref_slot: usize
+  frame_mvs: &Vec<MotionVector>, ref_slot: usize
 ) -> (Vec<MotionVector>) {
   let mut predictors = Vec::new();
 
@@ -188,27 +184,30 @@ pub fn get_subset_predictors(
 
   // EPZS subset C predictors.
 
-  if let Some(ref frame_ref) = frame_ref_opt {
-    let prev_frame_mvs = &frame_ref.frame_mvs[ref_slot];
+  for i in 0..INTER_REFS_PER_FRAME {
+    let frame_ref_opt = &fi.rec_buffer.frames[fi.ref_frames[i] as usize];
+    if let Some(ref frame_ref) = frame_ref_opt {
+      let ref_frame_mvs = &frame_ref.frame_mvs[ref_slot];
 
-    if bo.x > 0 {
-      let left = prev_frame_mvs[bo.y * fi.w_in_b + bo.x - 1];
-      predictors.push(left);
-    }
-    if bo.y > 0 {
-      let top = prev_frame_mvs[(bo.y - 1) * fi.w_in_b + bo.x];
-      predictors.push(top);
-    }
-    if bo.x < fi.w_in_b - 1 {
-      let right = prev_frame_mvs[bo.y * fi.w_in_b + bo.x + 1];
-      predictors.push(right);
-    }
-    if bo.y < fi.h_in_b - 1 {
-      let bottom = prev_frame_mvs[(bo.y + 1) * fi.w_in_b + bo.x];
-      predictors.push(bottom);
-    }
+      if bo.x > 0 {
+        let left = ref_frame_mvs[bo.y * fi.w_in_b + bo.x - 1];
+        predictors.push(left);
+      }
+      if bo.y > 0 {
+        let top = ref_frame_mvs[(bo.y - 1) * fi.w_in_b + bo.x];
+        predictors.push(top);
+      }
+      if bo.x < fi.w_in_b - 1 {
+        let right = ref_frame_mvs[bo.y * fi.w_in_b + bo.x + 1];
+        predictors.push(right);
+      }
+      if bo.y < fi.h_in_b - 1 {
+        let bottom = ref_frame_mvs[(bo.y + 1) * fi.w_in_b + bo.x];
+        predictors.push(bottom);
+      }
 
-    predictors.push(prev_frame_mvs[bo.y * fi.w_in_b + bo.x]);
+      predictors.push(ref_frame_mvs[bo.y * fi.w_in_b + bo.x]);
+    }
   }
 
   predictors
@@ -239,11 +238,10 @@ pub fn motion_estimation(
       let mut best_mv = MotionVector { row: 0, col: 0 };
 
       let frame_mvs = &fs.frame_mvs[ref_slot];
-      let frame_ref = &fi.rec_buffer.frames[fi.ref_frames[0] as usize];
 
       if fi.config.speed_settings.diamond_me {
         let predictors = get_subset_predictors(fi, bo, cmv,
-          frame_mvs, frame_ref, ref_slot);
+          frame_mvs, ref_slot);
 
         diamond_me_search(
           fi, &po,
