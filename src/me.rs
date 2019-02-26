@@ -229,8 +229,7 @@ fn get_mv_range(
 
 pub fn get_subset_predictors<T: Pixel>(
   fi: &FrameInvariants<T>, bo: &BlockOffset, cmv: MotionVector,
-  frame_mvs: &[MotionVector], frame_ref_opt: &Option<Arc<ReferenceFrame<T>>>,
-  ref_slot: usize
+  frame_mvs: &[MotionVector], frame_ref_opt: &Option<Arc<ReferenceFrame<T>>>
 ) -> (Vec<MotionVector>) {
   let mut predictors = Vec::new();
 
@@ -269,7 +268,7 @@ pub fn get_subset_predictors<T: Pixel>(
   // EPZS subset C predictors.
 
   if let Some(ref frame_ref) = frame_ref_opt {
-    let prev_frame_mvs = &frame_ref.frame_mvs[ref_slot];
+    let prev_frame_mvs = &frame_ref.frame_mvs;
 
     if bo.x > 0 {
       let left = prev_frame_mvs[bo.y * fi.w_in_b + bo.x - 1];
@@ -296,8 +295,7 @@ pub fn get_subset_predictors<T: Pixel>(
 
 pub fn motion_estimation<T: Pixel>(
   fi: &FrameInvariants<T>, fs: &FrameState<T>, bsize: BlockSize, bo: &BlockOffset,
-  ref_frame: usize, cmv: MotionVector, pmv: [MotionVector; 2],
-  ref_slot: usize
+  ref_frame: usize, cmv: MotionVector, pmv: [MotionVector; 2]
 ) -> MotionVector {
   match fi.rec_buffer.frames[fi.ref_frames[ref_frame - LAST_FRAME] as usize] {
     Some(ref rec) => {
@@ -318,12 +316,12 @@ pub fn motion_estimation<T: Pixel>(
       let mut lowest_cost = std::u64::MAX;
       let mut best_mv = MotionVector::default();
 
-      let frame_mvs = &fs.frame_mvs[ref_slot];
-      let frame_ref = &fi.rec_buffer.frames[fi.ref_frames[0] as usize];
+      let frame_mvs = &fs.frame_mvs;
+      let frame_ref = &fi.rec_buffer.frames[fi.ref_frames[LAST_FRAME - LAST_FRAME] as usize];
 
       if fi.config.speed_settings.diamond_me {
         let predictors = get_subset_predictors(fi, bo, cmv,
-          frame_mvs, frame_ref, ref_slot);
+          frame_mvs, frame_ref);
 
         diamond_me_search(
           fi, &po,
