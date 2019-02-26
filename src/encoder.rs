@@ -151,12 +151,13 @@ impl<'a, T: Pixel> Iterator for PixelIter<'a, T> {
 
 #[derive(Debug, Clone)]
 pub struct ReferenceFrame<T: Pixel> {
+  pub number: u64,
   pub order_hint: u32,
   pub frame: Frame<T>,
   pub input_hres: Plane<T>,
   pub input_qres: Plane<T>,
   pub cdfs: CDFContext,
-  pub frame_mvs: Vec<Vec<MotionVector>>,
+  pub frame_mvs: Vec<MotionVector>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -392,7 +393,7 @@ pub struct FrameState<T: Pixel> {
   pub deblock: DeblockState,
   pub segmentation: SegmentationState,
   pub restoration: RestorationState,
-  pub frame_mvs: Vec<Vec<MotionVector>>,
+  pub frame_mvs: Vec<MotionVector>,
   pub t: RDOTracker,
 }
 
@@ -420,7 +421,7 @@ impl<T: Pixel> FrameState<T> {
       deblock: Default::default(),
       segmentation: Default::default(),
       restoration: rs,
-      frame_mvs: vec![vec![MotionVector::default(); fi.w_in_b * fi.h_in_b]; REF_FRAMES],
+      frame_mvs: vec![MotionVector::default(); fi.w_in_b * fi.h_in_b],
       t: RDOTracker::new()
     }
   }
@@ -1106,6 +1107,20 @@ pub fn motion_compensate<T: Pixel>(
   }
 }
 
+pub fn save_block_motion<T: Pixel>(
+  fi: &FrameInvariants<T>, fs: &mut FrameState<T>,
+  bsize: BlockSize, bo: &BlockOffset,
+  mv: MotionVector, mv_denum: i16
+) {
+  let frame_mvs = &mut fs.frame_mvs;
+  for mi_y in (bo.y)..(bo.y + bsize.height_mi()) {
+    for mi_x in (bo.x)..(bo.x + bsize.width_mi()) {
+      let offset = mi_y * fi.w_in_b + mi_x;
+      frame_mvs[offset] = mv / mv_denum;
+    }
+  }
+}
+
 pub fn encode_block_a<T: Pixel>(
   seq: &Sequence, fs: &FrameState<T>,
   cw: &mut ContextWriter, w: &mut dyn Writer,
@@ -1562,6 +1577,15 @@ fn encode_partition_bottomup<T: Pixel>(
     rdo_output.part_modes.push(mode_decision.clone());
 
     if !can_split {
+      if !mode_decision.pred_mode_luma.is_intra() {
+        // Fill the saved motion structure
+        if let Some(rec) = &fi.rec_buffer.frames[fi.ref_frames[mode_decision.ref_frames[0] - LAST_FRAME] as usize] {
+          let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+          save_block_motion(
+            fi, fs, mode_decision.bsize, &mode_decision.bo, mode_decision.mvs[0], frame_number_diff
+          );
+        }
+      }
       encode_block_with_modes(fi, fs, cw, w_pre_cdef, w_post_cdef, bsize, bo,
                               &mode_decision, rdo_type);
     }
@@ -1677,6 +1701,15 @@ fn encode_partition_bottomup<T: Pixel>(
         for mode in rdo_output.part_modes.clone() {
           assert!(subsize == mode.bsize);
           let offset = mode.bo.clone();
+          if !mode.pred_mode_luma.is_intra() {
+            // Fill the saved motion structure
+            if let Some(rec) = &fi.rec_buffer.frames[fi.ref_frames[mode.ref_frames[0] - LAST_FRAME] as usize] {
+              let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+              save_block_motion(
+                fi, fs, mode.bsize, &mode.bo, mode.mvs[0], frame_number_diff
+              );
+            }
+          }
           // FIXME: redundant block re-encode
           encode_block_with_modes(fi, fs, cw, w_pre_cdef, w_post_cdef,
                                   mode.bsize, &offset, &mode, rdo_type);
@@ -1843,6 +1876,11 @@ fn encode_partition_topdown<T: Pixel>(
             else { PredictionMode::GLOBALMV };
           }
           mode_chroma = mode_luma;
+        }
+
+        if let Some(rec) = &fi.rec_buffer.frames[fi.ref_frames[ref_frames[0] - LAST_FRAME] as usize] {
+          let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+          save_block_motion(fi, fs, part_decision.bsize, &part_decision.bo, mvs[0], frame_number_diff);
         }
       }
 
@@ -2189,6 +2227,7 @@ pub fn encode_frame<T: Pixel>(fi: &mut FrameInvariants<T>, fs: &mut FrameState<T
 pub fn update_rec_buffer<T: Pixel>(fi: &mut FrameInvariants<T>, fs: FrameState<T>) {
   let rfs = Arc::new(
     ReferenceFrame {
+      number: fi.number,
       order_hint: fi.order_hint,
       frame: fs.rec,
       input_hres: fs.input_hres,

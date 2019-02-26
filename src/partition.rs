@@ -754,6 +754,14 @@ impl ops::Div<i16> for MotionVector {
     }
 }
 
+impl ops::Mul<i16> for MotionVector {
+    type Output = MotionVector;
+
+    fn mul(self, _rhs: i16) -> MotionVector {
+        MotionVector{row: self.row  * _rhs, col: self.col * _rhs}
+    }
+}
+
 impl MotionVector {
   pub fn quantize_to_fullpel(self) -> Self {
     Self {
