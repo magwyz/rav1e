@@ -319,7 +319,7 @@ pub fn motion_estimation<T: Pixel>(
 
       let frame_mvs = &fs.frame_mvs;
       let frame_ref = &fi.rec_buffer.frames[fi.ref_frames[LAST_FRAME - LAST_FRAME] as usize];
-      let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+      let frame_number_diff = (fi.number as i64 - rec.number as i64).abs() as i16;
 
       if fi.config.speed_settings.diamond_me {
         let predictors = get_subset_predictors(fi, bo, cmv,

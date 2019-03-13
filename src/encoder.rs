@@ -1580,7 +1580,7 @@ fn encode_partition_bottomup<T: Pixel>(
       if !mode_decision.pred_mode_luma.is_intra() {
         // Fill the saved motion structure
         if let Some(rec) = &fi.rec_buffer.frames[fi.ref_frames[mode_decision.ref_frames[0] - LAST_FRAME] as usize] {
-          let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+          let frame_number_diff = (fi.number as i64 - rec.number as i64).abs() as i16;
           save_block_motion(
             fi, fs, mode_decision.bsize, &mode_decision.bo, mode_decision.mvs[0], frame_number_diff
           );
@@ -1704,7 +1704,7 @@ fn encode_partition_bottomup<T: Pixel>(
           if !mode.pred_mode_luma.is_intra() {
             // Fill the saved motion structure
             if let Some(rec) = &fi.rec_buffer.frames[fi.ref_frames[mode.ref_frames[0] - LAST_FRAME] as usize] {
-              let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+              let frame_number_diff = (fi.number as i64 - rec.number as i64).abs() as i16;
               save_block_motion(
                 fi, fs, mode.bsize, &mode.bo, mode.mvs[0], frame_number_diff
               );
@@ -1879,7 +1879,7 @@ fn encode_partition_topdown<T: Pixel>(
         }
 
         if let Some(rec) = &fi.rec_buffer.frames[fi.ref_frames[ref_frames[0] - LAST_FRAME] as usize] {
-          let frame_number_diff = (fi.number as i64 - rec.number as i64) as i16;
+          let frame_number_diff = (fi.number as i64 - rec.number as i64).abs() as i16;
           save_block_motion(fi, fs, part_decision.bsize, &part_decision.bo, mvs[0], frame_number_diff);
         }
       }
